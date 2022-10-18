@@ -68,6 +68,7 @@
 #define	PS_IP6FORWARDING	0x0204
 #define	PS_GETIFADDRS		0x0205
 #define	PS_IFIGNOREGRP		0x0206
+#define	PS_SYSCTL		0x0207
 
 /* Dev Commands */
 #define	PS_DEV_LISTENING	0x1001
@@ -82,6 +83,10 @@
 /* Control Type (via flags) */
 #define	PS_CTL_PRIV		0x0004
 #define	PS_CTL_UNPRIV		0x0005
+
+/* Sysctl Needs (via flags) */
+#define	PS_SYSCTL_OLEN		0x0001
+#define	PS_SYSCTL_ODATA		0x0002
 
 /* Process commands */
 #define	PS_START		0x4000
@@ -103,14 +108,6 @@
 	(((ctx)->options & (DHCPCD_PRIVSEP | DHCPCD_FORKED)) == DHCPCD_PRIVSEP)
 
 #define	PS_PROCESS_TIMEOUT	5	/* seconds to stop all processes */
-
-/* We always have ourself as a process */
-#define	PS_WAITING_FOR_PROCESSES(_ctx)				\
-	((IN_PRIVSEP_SE((_ctx)) &&				\
-	  TAILQ_LAST(&(_ctx)->ps_processes, ps_process_head) != (_ctx)->ps_root) ||	\
-	  (!IN_PRIVSEP_SE((_ctx)) &&				\
-	  TAILQ_FIRST(&(_ctx)->ps_processes) !=			\
-	  TAILQ_LAST(&(_ctx)->ps_processes, ps_process_head)))
 
 #if defined(PRIVSEP) && defined(HAVE_CAPSICUM)
 #define PRIVSEP_RIGHTS
@@ -164,6 +161,7 @@ struct ps_msg {
 };
 
 struct bpf;
+
 struct ps_process {
 	TAILQ_ENTRY(ps_process) next;
 	struct dhcpcd_ctx *psp_ctx;
@@ -176,6 +174,7 @@ struct ps_process {
 	char psp_name[PSP_NAMESIZE];
 	uint16_t psp_proto;
 	const char *psp_protostr;
+	bool psp_started;
 
 #ifdef INET
 	int (*psp_filter)(const struct bpf *, const struct in_addr *);
@@ -241,6 +240,7 @@ int ps_stopprocess(struct ps_process *);
 struct ps_process *ps_findprocess(struct dhcpcd_ctx *, struct ps_id *);
 struct ps_process *ps_findprocesspid(struct dhcpcd_ctx *, pid_t);
 struct ps_process *ps_newprocess(struct dhcpcd_ctx *, struct ps_id *);
+bool ps_waitforprocs(struct dhcpcd_ctx *ctx);
 void ps_process_timeout(void *);
 void ps_freeprocess(struct ps_process *);
 void ps_freeprocesses(struct dhcpcd_ctx *, struct ps_process *);

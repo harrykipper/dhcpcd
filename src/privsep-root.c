@@ -609,7 +609,7 @@ ps_root_recvmsgcb(void *arg, struct ps_msghdr *psm, struct msghdr *msg)
 		break;
 #endif
 	default:
-		err = ps_root_os(psm, msg, &rdata, &rlen);
+		err = ps_root_os(ctx, psm, msg, &rdata, &rlen, &free_rdata);
 		break;
 	}
 
@@ -667,6 +667,20 @@ ps_root_startcb(struct ps_process *psp)
 		    ctx->options & DHCPCD_IPV6 ? " [ip6]" : "");
 	ctx->options |= DHCPCD_PRIVSEPROOT;
 
+	if (if_opensockets(ctx) == -1)
+		logerr("%s: if_opensockets", __func__);
+#ifdef BSD
+	else {
+		/* We only want to write to this socket, so set
+		 * a small as possible buffer size. */
+		socklen_t smallbuf = 1;
+
+		if (setsockopt(ctx->link_fd, SOL_SOCKET, SO_RCVBUF,
+		    &smallbuf, (socklen_t)sizeof(smallbuf)) == -1)
+			logerr("%s: setsockopt(SO_RCVBUF)", __func__);
+	}
+#endif
+
 	/* Open network sockets for sending.
 	 * This is a small bit wasteful for non sandboxed OS's
 	 * but makes life very easy for unicasting DHCPv6 in non manager
@@ -720,6 +734,7 @@ ps_root_startcb(struct ps_process *psp)
 	    (DHCPCD_MANAGER | DHCPCD_DEV))
 		dev_start(ctx, ps_root_handleinterface);
 #endif
+
 	return 0;
 }
 
@@ -769,7 +784,7 @@ ps_root_signalcb(int sig, void *arg)
 
 	if (!(ctx->options & DHCPCD_EXITING))
 		return;
-	if (!(PS_WAITING_FOR_PROCESSES(ctx)))
+	if (!(ps_waitforprocs(ctx)))
 		eloop_exit(ctx->ps_eloop, EXIT_SUCCESS);
 }
 
@@ -909,22 +924,34 @@ ps_root_start(struct dhcpcd_ctx *ctx)
 int
 ps_root_stop(struct dhcpcd_ctx *ctx)
 {
-
-	/* If we are the root process, ensure the log fd is fully drained. */
-	if (ctx->options & DHCPCD_PRIVSEPROOT && ctx->ps_log_fd != -1) {
-		do {
-			;
-		} while (logreadfd(ctx->ps_log_fd) != -1);
-	}
+	struct ps_process *psp = ctx->ps_root;
 
 	if (!(ctx->options & DHCPCD_PRIVSEP) ||
-	    ctx->options & DHCPCD_FORKED ||
 	    ctx->eloop == NULL)
 		return 0;
 
-	if (ps_stopprocess(ctx->ps_root) == -1)
+	/* If we are the root process then remove the pidfile */
+	if (ctx->options & DHCPCD_PRIVSEPROOT) {
+		if (unlink(ctx->pidfile) == -1)
+			logerr("%s: unlink: %s", __func__, ctx->pidfile);
+	}
+
+	/* Only the manager process gets past this point. */
+	if (ctx->options & DHCPCD_FORKED)
+		return 0;
+
+	/* We cannot log the root process exited before we
+	 * log dhcpcd exits because the latter requires the former.
+	 * So we just log the intent to exit.
+	 * Even sending this will be a race to exit. */
+	logdebugx("%s%s%s will exit from PID %d",
+	    psp->psp_ifname,
+	    psp->psp_ifname[0] != '\0' ? ": " : "",
+	    psp->psp_name, psp->psp_pid);
+
+	if (ps_stopprocess(psp) == -1)
 		return -1;
-	ctx->ps_root = NULL;
+
 	return ps_stopwait(ctx);
 }
 

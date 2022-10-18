@@ -962,6 +962,8 @@ dhcp6_makemessage(struct interface *ifp)
 		else
 			ia_na_len = sizeof(ia_na);
 		memcpy(ia_na.iaid, ifia->iaid, sizeof(ia_na.iaid));
+		/* RFC 8415 21.4 and 21.21 state that T1 and T2 should be zero.
+		 * An RFC compliant server MUST ignore them anyway. */
 		ia_na.t1 = 0;
 		ia_na.t2 = 0;
 		COPYIN(ifia->ia_type, &ia_na, ia_na_len);
@@ -980,11 +982,16 @@ dhcp6_makemessage(struct interface *ifp)
 				continue;
 			if (ap->ia_type == D6_OPTION_IA_PD) {
 #ifndef SMALL
-				struct dhcp6_pd_addr pdp;
+				struct dhcp6_pd_addr pdp = {
+				    .prefix_len = ap->prefix_len,
+				    /*
+				     * RFC 8415 21.22 states that the
+				     * valid and preferred lifetimes sent by
+				     * the client SHOULD be zero and MUST
+				     * be ignored by the server.
+				     */
+				};
 
-				pdp.pltime = htonl(ap->prefix_pltime);
-				pdp.vltime = htonl(ap->prefix_vltime);
-				pdp.prefix_len = ap->prefix_len;
 				/* pdp.prefix is not aligned, so copy it in. */
 				memcpy(&pdp.prefix, &ap->prefix, sizeof(pdp.prefix));
 				COPYIN(D6_OPTION_IAPREFIX, &pdp, sizeof(pdp));
@@ -1019,11 +1026,16 @@ dhcp6_makemessage(struct interface *ifp)
 				}
 #endif
 			} else {
-				struct dhcp6_ia_addr ia;
+				struct dhcp6_ia_addr ia = {
+				    .addr = ap->addr,
+				    /*
+				     * RFC 8415 21.6 states that the
+				     * valid and preferred lifetimes sent by
+				     * the client SHOULD be zero and MUST
+				     * be ignored by the server.
+				     */
+				};
 
-				ia.addr = ap->addr;
-				ia.pltime = htonl(ap->prefix_pltime);
-				ia.vltime = htonl(ap->prefix_vltime);
 				COPYIN(D6_OPTION_IA_ADDR, &ia, sizeof(ia));
 				ia_na_len = (uint16_t)
 				    (ia_na_len + sizeof(o) + sizeof(ia));
@@ -1219,7 +1231,7 @@ dhcp6_sendmessage(struct interface *ifp, void (*callback)(void *))
 	struct dhcp6_state *state = D6_STATE(ifp);
 	struct dhcpcd_ctx *ctx = ifp->ctx;
 	unsigned int RT;
-	bool broadcast = true;
+	bool multicast = true;
 	struct sockaddr_in6 dst = {
 	    .sin6_family = AF_INET6,
 	    /* Setting the port on Linux gives EINVAL when sending.
@@ -1259,24 +1271,24 @@ dhcp6_sendmessage(struct interface *ifp, void (*callback)(void *))
 			/* Unicasting is denied for these types. */
 			break;
 		default:
-			broadcast = false;
+			multicast = false;
 			inet_ntop(AF_INET6, &state->unicast, uaddr,
 			    sizeof(uaddr));
 			break;
 		}
 	}
-	dst.sin6_addr = broadcast ? alldhcp : state->unicast;
+	dst.sin6_addr = multicast ? alldhcp : state->unicast;
 
 	if (!callback) {
 		logdebugx("%s: %s %s with xid 0x%02x%02x%02x%s%s",
 		    ifp->name,
-		    broadcast ? "broadcasting" : "unicasting",
+		    multicast ? "multicasting" : "unicasting",
 		    dhcp6_get_op(state->send->type),
 		    state->send->xid[0],
 		    state->send->xid[1],
 		    state->send->xid[2],
-		    !broadcast ? " " : "",
-		    !broadcast ? uaddr : "");
+		    !multicast ? " " : "",
+		    !multicast ? uaddr : "");
 		RT = 0;
 	} else {
 		if (state->IMD &&
@@ -1314,13 +1326,13 @@ dhcp6_sendmessage(struct interface *ifp, void (*callback)(void *))
 			    " next in %0.1f seconds",
 			    ifp->name,
 			    state->IMD != 0 ? "delaying" :
-			    broadcast ? "broadcasting" : "unicasting",
+			    multicast ? "multicasting" : "unicasting",
 			    dhcp6_get_op(state->send->type),
 			    state->send->xid[0],
 			    state->send->xid[1],
 			    state->send->xid[2],
-			    state->IMD == 0 && !broadcast ? " " : "",
-			    state->IMD == 0 && !broadcast ? uaddr : "",
+			    state->IMD == 0 && !multicast ? " " : "",
+			    state->IMD == 0 && !multicast ? uaddr : "",
 			    (float)RT / MSEC_PER_SEC);
 
 		/* Wait the initial delay */
@@ -1347,7 +1359,7 @@ dhcp6_sendmessage(struct interface *ifp, void (*callback)(void *))
 #endif
 
 	/* Set the outbound interface */
-	if (broadcast) {
+	if (multicast) {
 		struct cmsghdr *cm;
 		struct in6_pktinfo pi = { .ipi6_ifindex = ifp->index };
 

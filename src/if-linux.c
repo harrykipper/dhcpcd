@@ -141,12 +141,6 @@ int if_getssid_wext(const char *ifname, uint8_t *ssid);
 	(struct rtattr *)(void *)(((char *)(rta)) \
 	+ RTA_ALIGN((rta)->rta_len)))
 
-struct priv {
-	int route_fd;
-	int generic_fd;
-	uint32_t route_pid;
-};
-
 /* We need this to send a broadcast for InfiniBand.
  * Our old code used sendto, but our new code writes to a raw BPF socket.
  * What header structure does IPoIB use? */
@@ -445,6 +439,13 @@ if_opensockets_os(struct dhcpcd_ctx *ctx)
 	int on = 1;
 #endif
 
+#ifdef PRIVSEP
+	if (ctx->options & DHCPCD_PRIVSEPROOT) {
+		ctx->link_fd = -1;
+		goto setup_priv;
+	}
+#endif
+
 	/* Open the link socket first so it gets pid() for the socket.
 	 * Then open our persistent route socket so we get a unique
 	 * pid that doesn't clash with a process id for after we fork. */
@@ -467,6 +468,9 @@ if_opensockets_os(struct dhcpcd_ctx *ctx)
 		logerr("%s: NETLINK_BROADCAST_ERROR", __func__);
 #endif
 
+#ifdef PRIVSEP
+setup_priv:
+#endif
 	if ((priv = calloc(1, sizeof(*priv))) == NULL)
 		return -1;
 
@@ -495,8 +499,10 @@ if_closesockets_os(struct dhcpcd_ctx *ctx)
 
 	if (ctx->priv != NULL) {
 		priv = (struct priv *)ctx->priv;
-		close(priv->route_fd);
-		close(priv->generic_fd);
+		if (priv->route_fd != -1)
+			close(priv->route_fd);
+		if (priv->generic_fd != -1)
+			close(priv->generic_fd);
 	}
 }
 
@@ -2000,7 +2006,7 @@ _if_addrflags6(__unused struct dhcpcd_ctx *ctx,
 	for (; RTA_OK(rta, len); rta = RTA_NEXT(rta, len)) {
 		switch (rta->rta_type) {
 		case IFA_ADDRESS:
-			if (IN6_ARE_ADDR_EQUAL(&ia->ifa_addr, RTA_DATA(rta)))
+			if (IN6_ARE_ADDR_EQUAL(&ia->ifa_addr, (struct in6_addr *)RTA_DATA(rta)))
 				ia->ifa_found = matches_addr = true;
 			else
 				matches_addr = false;

@@ -1828,6 +1828,24 @@ dhcpcd_stderr_cb(void *arg, unsigned short events)
 	fprintf(stderr, "%s", log);
 }
 
+static void
+dhcpcd_pidfile_timeout(void *arg)
+{
+	struct dhcpcd_ctx *ctx = arg;
+	pid_t pid;
+
+	pid = pidfile_read(ctx->pidfile);
+
+	if(pid == -1)
+		eloop_exit(ctx->eloop, EXIT_SUCCESS);
+	else if (++ctx->duid_len >= 100) { /* overload duid_len */
+		logerrx("pid %d failed to exit", pid);
+		eloop_exit(ctx->eloop, EXIT_FAILURE);
+	} else
+		eloop_timeout_add_msec(ctx->eloop, 100,
+		    dhcpcd_pidfile_timeout, ctx);
+}
+
 int
 main(int argc, char **argv, char **envp)
 {
@@ -1963,12 +1981,6 @@ main(int argc, char **argv, char **envp)
 		case 'n':
 			sig = SIGHUP;
 			siga = "HUP";
-			break;
-		case 'g':
-		case 'p':
-			/* Force going via command socket as we're
-			 * out of user definable signals. */
-			i = 4;
 			break;
 		case 'q':
 			/* -qq disables console output entirely.
@@ -2119,6 +2131,14 @@ printpidfile:
 			snprintf(ctx.pidfile, sizeof(ctx.pidfile),
 			    PIDFILE, "", "", "");
 			ctx.options |= DHCPCD_MANAGER;
+
+			/*
+			 * If we are given any interfaces, we
+			 * cannot send a signal as that would impact
+			 * other interfaces.
+			 */
+			if (optind != argc)
+				sig = 0;
 		}
 		if (ctx.options & DHCPCD_PRINT_PIDFILE) {
 			printf("%s\n", ctx.pidfile);
@@ -2154,31 +2174,20 @@ printpidfile:
 		if (pid != 0 && pid != -1)
 			loginfox("sending signal %s to pid %d", siga, pid);
 		if (pid == 0 || pid == -1 || kill(pid, sig) != 0) {
-			if (sig != SIGHUP && sig != SIGUSR1 && errno != EPERM)
-				logerrx(PACKAGE" not running");
 			if (pid != 0 && pid != -1 && errno != ESRCH) {
 				logerr("kill");
 				goto exit_failure;
 			}
 			unlink(ctx.pidfile);
-			if (sig != SIGHUP && sig != SIGUSR1)
-				goto exit_failure;
+			/* We can still continue and send the command
+			 * via the control socket. */
 		} else {
-			struct timespec ts;
-
 			if (sig == SIGHUP || sig == SIGUSR1)
 				goto exit_success;
 			/* Spin until it exits */
 			loginfox("waiting for pid %d to exit", pid);
-			ts.tv_sec = 0;
-			ts.tv_nsec = 100000000; /* 10th of a second */
-			for(i = 0; i < 100; i++) {
-				nanosleep(&ts, NULL);
-				if (pidfile_read(ctx.pidfile) == -1)
-					goto exit_success;
-			}
-			logerrx("pid %d failed to exit", pid);
-			goto exit_failure;
+			dhcpcd_pidfile_timeout(&ctx);
+			goto run_loop;
 		}
 	}
 #endif
@@ -2231,12 +2240,8 @@ printpidfile:
 	}
 #endif
 
-	/* Test against siga instead of sig to avoid gcc
-	 * warning about a bogus potential signed overflow.
-	 * The end result will be the same. */
-	if ((siga == NULL || i == 4 || ctx.ifc != 0) &&
-	    !(ctx.options & DHCPCD_TEST))
-	{
+	/* Try and contact the manager process to send the instruction. */
+	if (!(ctx.options & DHCPCD_TEST)) {
 		ctx.options |= DHCPCD_FORKED; /* avoid socket unlink */
 		if (!(ctx.options & DHCPCD_MANAGER))
 			ctx.control_fd = control_open(argv[optind], family,
@@ -2273,9 +2278,14 @@ printpidfile:
 		} else {
 			if (errno != ENOENT)
 				logerr("%s: control_open", __func__);
-			if (ctx.options & DHCPCD_DUMPLEASE) {
+			/* If asking dhcpcd to exit and we failed to
+			 * send a signal or a message then we
+			 * don't proceed past here. */
+			if (ctx.options & DHCPCD_DUMPLEASE ||
+			    sig == SIGTERM || sig == SIGALRM)
+			{
 				if (errno == ENOENT)
-					logerrx("dhcpcd is not running");
+					logerrx(PACKAGE" is not running");
 				goto exit_failure;
 			}
 			if (errno == EPERM || errno == EACCES)
@@ -2646,15 +2656,8 @@ exit1:
 	if (ps_stopwait(&ctx) != EXIT_SUCCESS)
 		i = EXIT_FAILURE;
 #endif
-	if (ctx.options & DHCPCD_STARTED && !(ctx.options & DHCPCD_FORKED)) {
+	if (ctx.options & DHCPCD_STARTED && !(ctx.options & DHCPCD_FORKED))
 		loginfox(PACKAGE " exited");
-
-#ifdef PRIVSEP
-		/* Sleep some for the exited log entry to be written. */
-		struct timespec ts = { .tv_nsec = 10 };
-		nanosleep(&ts, NULL);
-#endif
-	}
 #ifdef PRIVSEP
 	if (ps_root_stop(&ctx) == -1)
 		i = EXIT_FAILURE;
