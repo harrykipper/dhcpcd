@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * dhcpcd - IPv6 ND handling
- * Copyright (c) 2006-2021 Roy Marples <roy@marples.name>
+ * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
  * All rights reserved
 
  * Redistribution and use in source and binary forms, with or without
@@ -92,7 +92,7 @@ struct nd_opt_dnssl {		/* DNSSL option RFC 6106 */
 	uint32_t	nd_opt_dnssl_lifetime;
 	/* followed by list of DNS servers */
 };
-__CTASSERT(sizeof(struct nd_opt_rdnss) == 8);
+__CTASSERT(sizeof(struct nd_opt_dnssl) == 8);
 #endif
 
 /* Impossible options, so we can easily add extras */

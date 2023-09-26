@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * eloop - portable event based main loop.
- * Copyright (c) 2006-2021 Roy Marples <roy@marples.name>
+ * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
  * All rights reserved.
 
  * Redistribution and use in source and binary forms, with or without
@@ -151,6 +151,10 @@
 
 #ifdef ELOOP_DEBUG
 #include <stdio.h>
+#endif
+
+#ifndef __arraycount
+#  define __arraycount(__x)       (sizeof(__x) / sizeof(__x[0]))
 #endif
 
 /*

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Privilege Separation for dhcpcd
- * Copyright (c) 2006-2021 Roy Marples <roy@marples.name>
+ * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
  * All rights reserved
 
  * Redistribution and use in source and binary forms, with or without
@@ -113,7 +113,9 @@
 #define PRIVSEP_RIGHTS
 #endif
 
-#ifdef __linux__
+#define PS_ROOT_FD(ctx) ((ctx)->ps_root ? (ctx)->ps_root->psp_fd : -1)
+
+#if !defined(DISABLE_SECCOMP) && defined(__linux__)
 # include <linux/version.h>
 # if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0)
 #  define HAVE_SECCOMP
@@ -211,7 +213,7 @@ ssize_t ps_sendmsg(struct dhcpcd_ctx *, int, uint16_t, unsigned long,
     const struct msghdr *);
 ssize_t ps_sendcmd(struct dhcpcd_ctx *, int, uint16_t, unsigned long,
     const void *data, size_t len);
-ssize_t ps_recvmsg(struct dhcpcd_ctx *, int, unsigned short, uint16_t, int);
+ssize_t ps_recvmsg(int, unsigned short, uint16_t, int);
 ssize_t ps_recvpsmsg(struct dhcpcd_ctx *, int, unsigned short,
     ssize_t (*callback)(void *, struct ps_msghdr *, struct msghdr *), void *);
 

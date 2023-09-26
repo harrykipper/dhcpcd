@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * dhcpcd - DHCP client daemon
- * Copyright (c) 2006-2021 Roy Marples <roy@marples.name>
+ * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
  * All rights reserved
 
  * Redistribution and use in source and binary forms, with or without
@@ -46,10 +46,15 @@ hwaddr_ntoa(const void *hwaddr, size_t hwlen, char *buf, size_t buflen)
 	const unsigned char *hp, *ep;
 	char *p;
 
-	if (buf == NULL || hwlen == 0)
+	/* Allow a hwlen of 0 to be an empty string. */
+	if (buf == NULL || buflen == 0) {
+		errno = ENOBUFS;
 		return NULL;
+	}
 
 	if (hwlen * 3 > buflen) {
+		/* We should still terminate the string just in case. */
+		buf[0] = '\0';
 		errno = ENOBUFS;
 		return NULL;
 	}
@@ -57,7 +62,6 @@ hwaddr_ntoa(const void *hwaddr, size_t hwlen, char *buf, size_t buflen)
 	hp = hwaddr;
 	ep = hp + hwlen;
 	p = buf;
-
 	while (hp < ep) {
 		if (hp != hwaddr)
 			*p ++= ':';

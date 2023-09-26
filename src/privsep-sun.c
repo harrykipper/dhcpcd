@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Privilege Separation for dhcpcd, Solaris driver
- * Copyright (c) 2006-2021 Roy Marples <roy@marples.name>
+ * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
  * All rights reserved
 
  * Redistribution and use in source and binary forms, with or without
@@ -105,7 +105,7 @@ ssize_t
 ps_root_ioctl6(struct dhcpcd_ctx *ctx, unsigned long request, void *data, size_t len)
 {
 
-	if (ps_sendcmd(ctx, ctx->ps_root_fd, PS_IOCTL6,
+	if (ps_sendcmd(ctx, PS_ROOT_FD(ctx), PS_IOCTL6,
 	    request, data, len) == -1)
 		return -1;
 	return ps_root_readerror(ctx, data, len);
@@ -115,7 +115,7 @@ ssize_t
 ps_root_route(struct dhcpcd_ctx *ctx, void *data, size_t len)
 {
 
-	if (ps_sendcmd(ctx, ctx->ps_root_fd, PS_ROUTE, 0, data, len) == -1)
+	if (ps_sendcmd(ctx, PS_ROOT_FD(ctx), PS_ROUTE, 0, data, len) == -1)
 		return -1;
 	return ps_root_readerror(ctx, data, len);
 }

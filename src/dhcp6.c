@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * dhcpcd - DHCP client daemon
- * Copyright (c) 2006-2021 Roy Marples <roy@marples.name>
+ * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
  * All rights reserved
 
  * Redistribution and use in source and binary forms, with or without
@@ -147,12 +147,18 @@ struct dhcp_compat {
 	uint16_t dhcp6_opt;
 };
 
+/*
+ * RFC 5908 deprecates OPTION_SNTP_SERVERS.
+ * But we can support both as the hook scripts will uniqify the
+ * results if the server returns both options.
+ */
 static const struct dhcp_compat dhcp_compats[] = {
 	{ DHO_DNSSERVER,	D6_OPTION_DNS_SERVERS },
 	{ DHO_HOSTNAME,		D6_OPTION_FQDN },
 	{ DHO_DNSDOMAIN,	D6_OPTION_FQDN },
 	{ DHO_NISSERVER,	D6_OPTION_NIS_SERVERS },
 	{ DHO_NTPSERVER,	D6_OPTION_SNTP_SERVERS },
+	{ DHO_NTPSERVER,	D6_OPTION_NTP_SERVER },
 	{ DHO_RAPIDCOMMIT,	D6_OPTION_RAPID_COMMIT },
 	{ DHO_FQDN,		D6_OPTION_FQDN },
 	{ DHO_VIVCO,		D6_OPTION_VENDOR_CLASS },
@@ -1661,10 +1667,7 @@ dhcp6_startinform(void *arg)
 
 	ifp = arg;
 	state = D6_STATE(ifp);
-	if (state->new_start || (state->new == NULL && !state->failed))
-		llevel = LOG_INFO;
-	else
-		llevel = LOG_DEBUG;
+	llevel = state->failed ? LOG_DEBUG : LOG_INFO;
 	logmessage(llevel, "%s: requesting DHCPv6 information", ifp->name);
 	state->state = DH6S_INFORM;
 	state->RTC = 0;
@@ -3063,7 +3066,7 @@ dhcp6_bind(struct interface *ifp, const char *op, const char *sfrom)
 	int loglevel;
 	struct timespec now;
 
-	if (state->state == DH6S_RENEW && !state->new_start) {
+	if (state->state == DH6S_RENEW) {
 		loglevel = LOG_DEBUG;
 		TAILQ_FOREACH(ia, &state->addrs, next) {
 			if (ia->flags & IPV6_AF_NEW) {
@@ -3962,8 +3965,10 @@ dhcp6_start(struct interface *ifp, enum DH6S init_state)
 			{
 				/* We don't want log spam when the RA
 				 * has just adjusted it's prefix times. */
-				if (state->state != DH6S_INFORMED)
+				if (state->state != DH6S_INFORMED) {
 					state->new_start = true;
+					state->failed = false;
+				}
 				dhcp6_startinform(ifp);
 			}
 			break;

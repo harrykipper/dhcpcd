@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * dhcpcd - DHCP client daemon
- * Copyright (c) 2006-2021 Roy Marples <roy@marples.name>
+ * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
  * All rights reserved
 
  * Redistribution and use in source and binary forms, with or without
@@ -764,7 +764,7 @@ script_runreason(const struct interface *ifp, const char *reason)
 #ifdef PRIVSEP
 	if (ctx->options & DHCPCD_PRIVSEP) {
 		if (ps_root_script(ctx,
-		    ctx->script_buf, ctx->script_buflen) == -1)
+		    ctx->script_buf, (size_t)buflen) == -1)
 			logerr(__func__);
 		goto send_listeners;
 	}

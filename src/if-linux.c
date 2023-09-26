@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Linux interface driver for dhcpcd
- * Copyright (c) 2006-2021 Roy Marples <roy@marples.name>
+ * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
  * All rights reserved
 
  * Redistribution and use in source and binary forms, with or without
@@ -59,6 +59,9 @@
 #else
 #include <linux/if_arp.h>
 #endif
+
+/* Inlcude this *after* net/if.h so we get IFF_DORMANT */
+#include <linux/if.h>
 
 #include <dirent.h>
 #include <errno.h>
@@ -182,18 +185,20 @@ static const char *mproc =
 	"cpu model"
 #elif defined(__frv__)
 	"System"
+#elif defined(__hppa__)
+	"model"
 #elif defined(__i386__) || defined(__x86_64__)
 	"vendor_id"
 #elif defined(__ia64__)
 	"vendor"
-#elif defined(__hppa__)
-	"model"
 #elif defined(__m68k__)
 	"MMU"
 #elif defined(__mips__)
 	"system type"
 #elif defined(__powerpc__) || defined(__powerpc64__)
 	"machine"
+#elif defined(__riscv)
+	"uarch"
 #elif defined(__s390__) || defined(__s390x__)
 	"Manufacturer"
 #elif defined(__sh__)
@@ -523,23 +528,39 @@ if_setmac(struct interface *ifp, void *mac, uint8_t maclen)
 	return if_ioctl(ifp->ctx, SIOCSIFHWADDR, &ifr, sizeof(ifr));
 }
 
+static int if_carrier_from_flags(unsigned int flags)
+{
+
+#ifdef IFF_LOWER_UP
+	return ((flags & (IFF_LOWER_UP | IFF_RUNNING)) ==
+		(IFF_LOWER_UP | IFF_RUNNING))
+#ifdef IFF_DORMANT
+		&& !(flags & IFF_DORMANT)
+#endif
+		? LINK_UP : LINK_DOWN;
+#else
+	return flags & IFF_RUNNING ? LINK_UP : LINK_DOWN;
+#endif
+}
+
 int
 if_carrier(struct interface *ifp, __unused const void *ifadata)
 {
-
-	return ifp->flags & IFF_RUNNING ? LINK_UP : LINK_DOWN;
+	return if_carrier_from_flags(ifp->flags);
 }
 
 bool
 if_roaming(struct interface *ifp)
 {
 
-#ifdef IFF_LOWER_UP
 	if (!ifp->wireless ||
-	    ifp->flags & IFF_RUNNING ||
-	    (ifp->flags & (IFF_UP | IFF_LOWER_UP)) != (IFF_UP | IFF_LOWER_UP))
+	    ifp->flags & IFF_RUNNING)
 		return false;
-	return true;
+
+#if defined(IFF_DORMANT)
+	return ifp->flags & IFF_DORMANT;
+#elif defined(IFF_LOWER_UP)
+	return (ifp->flags & (IFF_UP|IFF_LOWER_UP)) == (IFF_UP|IFF_LOWER_UP);
 #else
 	return false;
 #endif
@@ -554,15 +575,15 @@ if_getnetlink(struct dhcpcd_ctx *ctx, struct iovec *iov, int fd, int flags,
 	    .msg_name = &nladdr, .msg_namelen = sizeof(nladdr),
 	    .msg_iov = iov, .msg_iovlen = 1,
 	};
-	ssize_t len;
+	size_t len;
 	struct nlmsghdr *nlm;
 	int r = 0;
 	unsigned int again;
 	bool terminated;
 
 recv_again:
-	len = recvmsg(fd, &msg, flags);
-	if (len == -1 || len == 0)
+	len = (size_t)recvmsg(fd, &msg, flags);
+	if (len == 0 || (ssize_t)len == -1)
 		return (int)len;
 
 	/* Check sender */
@@ -578,7 +599,7 @@ recv_again:
 	again = 0;
 	terminated = false;
 	for (nlm = iov->iov_base;
-	     nlm && NLMSG_OK(nlm, (size_t)len);
+	     nlm && NLMSG_OK(nlm, len);
 	     nlm = NLMSG_NEXT(nlm, len))
 	{
 		again = (nlm->nlmsg_flags & NLM_F_MULTI);
@@ -1045,7 +1066,7 @@ link_netlink(struct dhcpcd_ctx *ctx, void *arg, struct nlmsghdr *nlm)
 	}
 
 	dhcpcd_handlecarrier(ifp,
-	    ifi->ifi_flags & IFF_RUNNING ? LINK_UP : LINK_DOWN,
+	    if_carrier_from_flags(ifi->ifi_flags),
 	    ifi->ifi_flags);
 	return 0;
 }
@@ -1143,7 +1164,8 @@ if_sendnetlink(struct dhcpcd_ctx *ctx, int protocol, struct nlmsghdr *hdr,
 }
 
 #define NLMSG_TAIL(nmsg)						\
-	((struct rtattr *)(((ptrdiff_t)(nmsg))+NLMSG_ALIGN((nmsg)->nlmsg_len)))
+	((struct rtattr *)(void *)(((char *)(nmsg)) + \
+	    NLMSG_ALIGN((nmsg)->nlmsg_len)))
 
 static int
 add_attr_l(struct nlmsghdr *n, unsigned short maxlen, unsigned short type,
@@ -1995,7 +2017,8 @@ _if_addrflags6(__unused struct dhcpcd_ctx *ctx,
 	size_t len;
 	struct rtattr *rta;
 	struct ifaddrmsg *ifa;
-	bool matches_addr = false;
+	struct in6_addr *local = NULL, *address = NULL;
+	uint32_t *flags = NULL;
 
 	ifa = NLMSG_DATA(nlm);
 	if (ifa->ifa_index != ia->ifa_ifindex || ifa->ifa_family != AF_INET6)
@@ -2006,17 +2029,26 @@ _if_addrflags6(__unused struct dhcpcd_ctx *ctx,
 	for (; RTA_OK(rta, len); rta = RTA_NEXT(rta, len)) {
 		switch (rta->rta_type) {
 		case IFA_ADDRESS:
-			if (IN6_ARE_ADDR_EQUAL(&ia->ifa_addr, (struct in6_addr *)RTA_DATA(rta)))
-				ia->ifa_found = matches_addr = true;
-			else
-				matches_addr = false;
+			address = (struct in6_addr *)RTA_DATA(rta);
+			break;
+		case IFA_LOCAL:
+			local = (struct in6_addr *)RTA_DATA(rta);
 			break;
 		case IFA_FLAGS:
-			if (matches_addr)
-				memcpy(&ia->ifa_flags, RTA_DATA(rta), sizeof(ia->ifa_flags));
+			flags = (uint32_t *)RTA_DATA(rta);
 			break;
 		}
 	}
+
+	if (local) {
+	       if (IN6_ARE_ADDR_EQUAL(&ia->ifa_addr, local))
+			ia->ifa_found = true;
+	} else if (address) {
+	       if (IN6_ARE_ADDR_EQUAL(&ia->ifa_addr, address))
+			ia->ifa_found = true;
+	}
+	if (flags && ia->ifa_found)
+		memcpy(&ia->ifa_flags, flags, sizeof(ia->ifa_flags));
 	return 0;
 }
 
@@ -2138,7 +2170,12 @@ if_setup_inet6(const struct interface *ifp)
 
 	snprintf(path, sizeof(path), "%s/%s/autoconf", p_conf, ifp->name);
 	ra = check_proc_int(ctx, path);
-	if (ra != 1 && ra != -1) {
+	if (ra == -1) {
+		/* The sysctl probably doesn't exist, but this isn't an
+		 * error as such so just log it and continue */
+		if (errno != ENOENT)
+			logerr("%s: %s", __func__, path);
+	} else if (ra != 0) {
 		if (if_writepathuint(ctx, path, 0) == -1)
 			logerr("%s: %s", __func__, path);
 	}

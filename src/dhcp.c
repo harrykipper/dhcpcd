@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * dhcpcd - DHCP client daemon
- * Copyright (c) 2006-2021 Roy Marples <roy@marples.name>
+ * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
  * All rights reserved
 
  * Redistribution and use in source and binary forms, with or without
@@ -395,7 +395,7 @@ print_rfc3442(FILE *fp, const uint8_t *data, size_t data_len)
 
 static int
 decode_rfc3442_rt(rb_tree_t *routes, struct interface *ifp,
-    const uint8_t *data, size_t dl, const struct bootp *bootp)
+    const uint8_t *data, size_t dl)
 {
 	const uint8_t *p = data;
 	const uint8_t *e;
@@ -442,15 +442,6 @@ decode_rfc3442_rt(rb_tree_t *routes, struct interface *ifp,
 		memcpy(&gateway.s_addr, p, 4);
 		p += 4;
 
-		/* An on-link host route is normally set by having the
-		 * gateway match the destination or assigned address */
-		if (gateway.s_addr == dest.s_addr ||
-		    (gateway.s_addr == bootp->yiaddr ||
-		    gateway.s_addr == bootp->ciaddr))
-		{
-			gateway.s_addr = INADDR_ANY;
-			netmask.s_addr = INADDR_BROADCAST;
-		}
 		if (netmask.s_addr == INADDR_BROADCAST)
 			rt->rt_flags = RTF_HOST;
 
@@ -589,7 +580,7 @@ get_option_routes(rb_tree_t *routes, struct interface *ifp,
 		if (p)
 			csr = "MS ";
 	}
-	if (p && (n = decode_rfc3442_rt(routes, ifp, p, len, bootp)) != -1) {
+	if (p && (n = decode_rfc3442_rt(routes, ifp, p, len)) != -1) {
 		const struct dhcp_state *state;
 
 		state = D_CSTATE(ifp);
@@ -3323,7 +3314,8 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
 			state->reason = "TEST";
 			script_runreason(ifp, state->reason);
 			eloop_exit(ifp->ctx->eloop, EXIT_SUCCESS);
-			state->bpf->bpf_flags |= BPF_EOF;
+			if (state->bpf)
+				state->bpf->bpf_flags |= BPF_EOF;
 			return;
 		}
 		eloop_timeout_delete(ifp->ctx->eloop, send_discover, ifp);
@@ -3445,8 +3437,8 @@ is_packet_udp_bootp(void *packet, size_t plen)
 	if (ip_hlen + ntohs(udp.uh_ulen) > plen)
 		return false;
 
-	/* Check it's to and from the right ports. */
-	if (udp.uh_dport != htons(BOOTPC) || udp.uh_sport != htons(BOOTPS))
+	/* Check it's to the right port. */
+	if (udp.uh_dport != htons(BOOTPC))
 		return false;
 
 	return true;
@@ -3828,6 +3820,7 @@ dhcp_free(struct interface *ifp)
 
 		free(ctx->opt_buffer);
 		ctx->opt_buffer = NULL;
+		ctx->opt_buffer_len = 0;
 	}
 }
 

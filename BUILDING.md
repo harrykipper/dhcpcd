@@ -2,6 +2,17 @@
 
 This attempts to document various ways of building dhcpcd for your
 platform.
+`./configure` is a POSIX shell script that works in a similar way
+to GNU configure.
+This works fine provided you don't force any exotic options down
+which may or may not be silently discarded.
+
+Some build time warnings are expected - the only platforms with zero
+warnings are DragonFlyBSD and NetBSD.
+It is expected that the platforms be improvded to support dhcpcd
+better.
+There maybe some loss of functionality, but for the most part,
+dhcpcd can work around these deficiencies.
 
 ## Size is an issue
 To compile small dhcpcd, maybe to be used for installation media where
@@ -108,6 +119,16 @@ Either upgrade or don't allow dhcpcd to manage the RA,
 so don't set either `ipv6ra_own` or `slaac private` in `dhcpcd.conf` if you
 want to have working IPv6 temporary addresses.
 SLAAC private addresses are just as private, just stable.
+
+Linux SECCOMP is very dependant on libc vs kernel.
+When libc is changed and uses a syscall that dhcpcd is unaware of,
+SECCOMP may break dhcpcd.
+When this happens you can configure dhcpcd with --disable-seccomp
+so dhcpcd can use a POSIX resource limited sandbox with privilege separation
+still. If you do this, please report the issue so that we can adjust the
+SECCOMP filter so that dhcpcd can use SECCOMP once more.
+Or convince the libc/kernel people to adpot something more maintainable
+like FreeBSD's capsicum or OpenBSD's pledge.
 
 ## Init systems
 We try and detect how dhcpcd should interact with system services at runtime.

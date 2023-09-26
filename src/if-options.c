@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * dhcpcd - DHCP client daemon
- * Copyright (c) 2006-2021 Roy Marples <roy@marples.name>
+ * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
  * All rights reserved
 
  * Redistribution and use in source and binary forms, with or without
@@ -193,7 +193,10 @@ add_environ(char ***array, const char *value, int uniq)
 	l = strlen(match);
 
 	while (list && list[i]) {
-		if (match && strncmp(list[i], match, l) == 0) {
+		/* We know that it must contain '=' due to the above test */
+		size_t listl = (size_t)(strchr(list[i], '=') - list[i]);
+
+		if (l == listl && strncmp(list[i], match, l) == 0) {
 			if (uniq) {
 				n = strdup(value);
 				if (n == NULL) {
@@ -266,9 +269,13 @@ parse_str(char *sbuf, size_t slen, const char *str, int flags)
 		}
 	} else {
 		l = (size_t)hwaddr_aton(NULL, str);
-		if (sbuf == NULL)
-			return (ssize_t)l;
-		if ((ssize_t) l != -1 && l > 1) {
+		if (l > 0) {
+			if ((ssize_t)l == -1) {
+				errno = ENOBUFS;
+				return -1;
+			}
+			if (sbuf == NULL)
+				return (ssize_t)l;
 			if (l > slen) {
 				errno = ENOBUFS;
 				return -1;
@@ -951,11 +958,16 @@ parse_option(struct dhcpcd_ctx *ctx, const char *ifname, struct if_options *ifo,
 		break;
 	case 'w':
 		ifo->options |= DHCPCD_WAITIP;
-		if (arg != NULL && arg[0] != '\0') {
-			if (arg[0] == '4' || arg[1] == '4')
+		p = UNCONST(arg);
+		// Generally it's --waitip=46, but some expect
+		// --waitip="4 6" to work as well.
+		// It's easier to allow it rather than have confusing docs.
+		while (p != NULL && p[0] != '\0') {
+			if (p[0] == '4' || p[1] == '4')
 				ifo->options |= DHCPCD_WAITIP4;
-			if (arg[0] == '6' || arg[1] == '6')
+			if (p[0] == '6' || p[1] == '6')
 				ifo->options |= DHCPCD_WAITIP6;
+			p = strskipwhite(++p);
 		}
 		break;
 	case 'y':
@@ -2096,7 +2108,7 @@ err_sla:
 		arg = fp;
 		fp = strend(arg);
 		if (fp == NULL) {
-			logerrx("authtoken requies an a key");
+			logerrx("authtoken requires a realm");
 			goto invalid_token;
 		}
 		*fp++ = '\0';
@@ -2149,7 +2161,7 @@ err_sla:
 			if (s == -1)
 				logerr("token_len");
 			else
-				logerrx("authtoken needs a key");
+				logerrx("authtoken requires a key");
 			goto invalid_token;
 		}
 		token->key_len = (size_t)s;

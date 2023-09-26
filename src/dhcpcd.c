@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * dhcpcd - DHCP client daemon
- * Copyright (c) 2006-2021 Roy Marples <roy@marples.name>
+ * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
  * All rights reserved
 
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,7 @@
  * SUCH DAMAGE.
  */
 
-static const char dhcpcd_copyright[] = "Copyright (c) 2006-2021 Roy Marples";
+static const char dhcpcd_copyright[] = "Copyright (c) 2006-2023 Roy Marples";
 
 #include <sys/file.h>
 #include <sys/ioctl.h>
@@ -74,6 +74,9 @@ static const char dhcpcd_copyright[] = "Copyright (c) 2006-2021 Roy Marples";
 
 #ifdef HAVE_CAPSICUM
 #include <sys/capsicum.h>
+#endif
+#ifdef HAVE_OPENSSL
+#include <openssl/crypto.h>
 #endif
 #ifdef HAVE_UTIL_H
 #include <util.h>
@@ -256,7 +259,7 @@ dhcpcd_ifafwaiting(const struct interface *ifp)
 		bool foundaddr = ipv6_hasaddr(ifp);
 
 		if (opts & DHCPCD_WAITIP6 && !foundaddr)
-			return AF_INET;
+			return AF_INET6;
 		if (foundaddr)
 			foundany = true;
 	}
@@ -1105,6 +1108,7 @@ out:
 		if_free(ifp);
 	}
 	free(ifs);
+	if_freeifaddrs(ctx, &ifaddrs);
 
 	return e;
 }
@@ -1244,6 +1248,7 @@ dhcpcd_linkoverflow(struct dhcpcd_ctx *ctx)
 	if_markaddrsstale(ctx->ifaces);
 	if_learnaddrs(ctx, ctx->ifaces, &ifaddrs);
 	if_deletestaleaddrs(ctx->ifaces);
+	if_freeifaddrs(ctx, &ifaddrs);
 }
 
 void
@@ -1409,6 +1414,7 @@ dhcpcd_renew(struct dhcpcd_ctx *ctx)
 
 #ifdef USE_SIGNALS
 #define sigmsg "received %s, %s"
+static volatile bool dhcpcd_exiting = false;
 void
 dhcpcd_signal_cb(int sig, void *arg)
 {
@@ -1481,9 +1487,20 @@ dhcpcd_signal_cb(int sig, void *arg)
 		return;
 	}
 
+	/*
+	 * Privsep has a mini-eloop for reading data from other processes.
+	 * This mini-eloop processes signals as well so we can reap children.
+	 * During teardown we don't want to process SIGTERM or SIGINT again,
+	 * as that could trigger memory issues.
+	 */
+	if (dhcpcd_exiting)
+		return;
+
+	dhcpcd_exiting = true;
 	if (!(ctx->options & DHCPCD_TEST))
 		stop_all_interfaces(ctx, opts);
 	eloop_exit(ctx->eloop, exit_code);
+	dhcpcd_exiting = false;
 }
 #endif
 
@@ -1493,7 +1510,7 @@ dhcpcd_handleargs(struct dhcpcd_ctx *ctx, struct fd_list *fd,
 {
 	struct interface *ifp;
 	unsigned long long opts;
-	int opt, oi, do_reboot, do_renew, af = AF_UNSPEC;
+	int opt, oi, oifind, do_reboot, do_renew, af = AF_UNSPEC;
 	size_t len, l, nifaces;
 	char *tmp, *p;
 
@@ -1509,7 +1526,7 @@ dhcpcd_handleargs(struct dhcpcd_ctx *ctx, struct fd_list *fd,
 		return control_queue(fd, UNCONST(fd->ctx->cffile),
 		    strlen(fd->ctx->cffile) + 1);
 	} else if (strcmp(*argv, "--getinterfaces") == 0) {
-		optind = argc = 0;
+		oifind = argc = 0;
 		goto dumplease;
 	} else if (strcmp(*argv, "--listen") == 0) {
 		fd->flags |= FD_LISTEN;
@@ -1572,6 +1589,9 @@ dhcpcd_handleargs(struct dhcpcd_ctx *ctx, struct fd_list *fd,
 		}
 	}
 
+	/* store the index; the optind will change when a getopt get called */
+	oifind = optind;
+
 	if (opts & DHCPCD_DUMPLEASE) {
 		ctx->options |= DHCPCD_DUMPLEASE;
 dumplease:
@@ -1579,11 +1599,11 @@ dumplease:
 		TAILQ_FOREACH(ifp, ctx->ifaces, next) {
 			if (!ifp->active)
 				continue;
-			for (oi = optind; oi < argc; oi++) {
+			for (oi = oifind; oi < argc; oi++) {
 				if (strcmp(ifp->name, argv[oi]) == 0)
 					break;
 			}
-			if (optind == argc || oi < argc) {
+			if (oifind == argc || oi < argc) {
 				opt = send_interface(NULL, ifp, af);
 				if (opt == -1)
 					goto dumperr;
@@ -1595,11 +1615,11 @@ dumplease:
 		TAILQ_FOREACH(ifp, ctx->ifaces, next) {
 			if (!ifp->active)
 				continue;
-			for (oi = optind; oi < argc; oi++) {
+			for (oi = oifind; oi < argc; oi++) {
 				if (strcmp(ifp->name, argv[oi]) == 0)
 					break;
 			}
-			if (optind == argc || oi < argc) {
+			if (oifind == argc || oi < argc) {
 				if (send_interface(fd, ifp, af) == -1)
 					goto dumperr;
 			}
@@ -1618,12 +1638,12 @@ dumperr:
 	}
 
 	if (opts & (DHCPCD_EXITING | DHCPCD_RELEASE)) {
-		if (optind == argc) {
+		if (oifind == argc) {
 			stop_all_interfaces(ctx, opts);
 			eloop_exit(ctx->eloop, EXIT_SUCCESS);
 			return 0;
 		}
-		for (oi = optind; oi < argc; oi++) {
+		for (oi = oifind; oi < argc; oi++) {
 			if ((ifp = if_find(ctx->ifaces, argv[oi])) == NULL)
 				continue;
 			if (!ifp->active)
@@ -1637,11 +1657,11 @@ dumperr:
 	}
 
 	if (do_renew) {
-		if (optind == argc) {
+		if (oifind == argc) {
 			dhcpcd_renew(ctx);
 			return 0;
 		}
-		for (oi = optind; oi < argc; oi++) {
+		for (oi = oifind; oi < argc; oi++) {
 			if ((ifp = if_find(ctx->ifaces, argv[oi])) == NULL)
 				continue;
 			dhcpcd_ifrenew(ifp);
@@ -1651,7 +1671,7 @@ dumperr:
 
 	reload_config(ctx);
 	/* XXX: Respect initial commandline options? */
-	reconf_reboot(ctx, do_reboot, argc, argv, optind - 1);
+	reconf_reboot(ctx, do_reboot, argc, argv, oifind);
 	return 0;
 }
 
@@ -1814,10 +1834,13 @@ dhcpcd_stderr_cb(void *arg, unsigned short events)
 	char log[BUFSIZ];
 	ssize_t len;
 
-	if (events != ELE_READ)
-		logerrx("%s: unexpected event 0x%04x", __func__, events);
+	if (events & ELE_HANGUP)
+		eloop_exit(ctx->eloop, EXIT_SUCCESS);
 
-	len = read(ctx->stderr_fd, log, sizeof(log));
+	if (!(events & ELE_READ))
+		return;
+
+	len = read(ctx->stderr_fd, log, sizeof(log) - 1);
 	if (len == -1) {
 		if (errno != ECONNRESET)
 			logerr(__func__);
@@ -2192,6 +2215,11 @@ printpidfile:
 	}
 #endif
 
+#ifdef HAVE_OPENSSL
+	OPENSSL_init_crypto(OPENSSL_INIT_ADD_ALL_CIPHERS |
+	    OPENSSL_INIT_ADD_ALL_DIGESTS | OPENSSL_INIT_LOAD_CONFIG, NULL);
+#endif
+
 #ifdef PRIVSEP
 	ps_init(&ctx);
 #endif
@@ -2539,6 +2567,8 @@ start_manager:
 			dhcpcd_initstate1(ifp, argc, argv, 0);
 	}
 	if_learnaddrs(&ctx, ctx.ifaces, &ifaddrs);
+	if_freeifaddrs(&ctx, &ifaddrs);
+	ifaddrs = NULL;
 
 	if (ctx.options & DHCPCD_BACKGROUND)
 		dhcpcd_daemonise(&ctx);
@@ -2609,14 +2639,7 @@ exit_failure:
 exit1:
 	if (!(ctx.options & DHCPCD_TEST) && control_stop(&ctx) == -1)
 		logerr("%s: control_stop", __func__);
-	if (ifaddrs != NULL) {
-#ifdef PRIVSEP_GETIFADDRS
-		if (IN_PRIVSEP(&ctx))
-			free(ifaddrs);
-		else
-#endif
-			freeifaddrs(ifaddrs);
-	}
+	if_freeifaddrs(&ctx, &ifaddrs);
 #ifdef PRIVSEP
 	ps_stop(&ctx);
 #endif

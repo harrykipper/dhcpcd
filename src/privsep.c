@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Privilege Separation for dhcpcd
- * Copyright (c) 2006-2021 Roy Marples <roy@marples.name>
+ * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
  * All rights reserved
 
  * Redistribution and use in source and binary forms, with or without
@@ -412,6 +412,12 @@ ps_startprocess(struct ps_process *psp,
 		return pid;
 	}
 
+#ifdef PLUGIN_DEV
+	/* If we are not the root process, stop listening to devices. */
+	if (ctx->ps_root != psp)
+		dev_stop(ctx);
+#endif
+
 	ctx->options |= DHCPCD_FORKED;
 	if (ctx->ps_log_fd != -1)
 		logsetfd(ctx->ps_log_fd);
@@ -534,11 +540,11 @@ ps_stopprocess(struct ps_process *psp)
 			err = -1;
 		}
 #endif
-		psp->psp_fd = -1;
 	}
 
 	/* Don't wait for the process as it may not respond to the shutdown
-	 * request. We'll reap the process on receipt of SIGCHLD. */
+	 * request. We'll reap the process on receipt of SIGCHLD where we
+	 * also close the fd. */
 	return err;
 }
 
@@ -1062,8 +1068,7 @@ nobufs:
 }
 
 ssize_t
-ps_recvmsg(struct dhcpcd_ctx *ctx, int rfd, unsigned short events,
-    uint16_t cmd, int wfd)
+ps_recvmsg(int rfd, unsigned short events, uint16_t cmd, int wfd)
 {
 	struct sockaddr_storage ss = { .ss_family = AF_UNSPEC };
 	uint8_t controlbuf[sizeof(struct sockaddr_storage)] = { 0 };
@@ -1082,22 +1087,15 @@ ps_recvmsg(struct dhcpcd_ctx *ctx, int rfd, unsigned short events,
 		logerrx("%s: unexpected event 0x%04x", __func__, events);
 
 	len = recvmsg(rfd, &msg, 0);
-	if (len == -1)
+	if (len == -1) {
 		logerr("%s: recvmsg", __func__);
-	if (len == -1 || len == 0) {
-		if (ctx->options & DHCPCD_FORKED)
-			eloop_exit(ctx->eloop,
-			    len != -1 ? EXIT_SUCCESS : EXIT_FAILURE);
 		return len;
 	}
 
 	iov[0].iov_len = (size_t)len;
 	len = ps_sendcmdmsg(wfd, cmd, &msg);
-	if (len == -1) {
+	if (len == -1)
 		logerr("%s: ps_sendcmdmsg", __func__);
-		if (ctx->options & DHCPCD_FORKED)
-			eloop_exit(ctx->eloop, EXIT_FAILURE);
-	}
 	return len;
 }
 
@@ -1142,9 +1140,6 @@ ps_recvpsmsg(struct dhcpcd_ctx *ctx, int fd, unsigned short events,
 		logdebugx("process %d stopping", getpid());
 #endif
 		ps_free(ctx);
-#ifdef PLUGIN_DEV
-		dev_stop(ctx);
-#endif
 		eloop_exit(ctx->eloop, len != -1 ? EXIT_SUCCESS : EXIT_FAILURE);
 		return len;
 	}
@@ -1204,7 +1199,7 @@ ps_newprocess(struct dhcpcd_ctx *ctx, struct ps_id *psid)
 #endif
 
 	if (!(ctx->options & DHCPCD_MANAGER))
-		strlcpy(psp->psp_ifname, ctx->ifv[0], sizeof(psp->psp_name));
+		strlcpy(psp->psp_ifname, ctx->ifv[0], sizeof(psp->psp_ifname));
 	TAILQ_INSERT_TAIL(&ctx->ps_processes, psp, next);
 	return psp;
 }

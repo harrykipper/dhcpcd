@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
- * dhcpcd - DHCP client daemon
- * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
- * All rights reserved
-
+ * Copyright (c) 2023 Canonical Ltd.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -25,14 +24,12 @@
  * SUCH DAMAGE.
  */
 
-#ifdef SMALL
-#define INITDEFINES	@INITDEFINES_SMALL@
-#define INITDEFINENDS	@INITDEFINENDS_SMALL@
-#define INITDEFINE6S	@INITDEFINE6S_SMALL@
-#else
-#define INITDEFINES	@INITDEFINES@
-#define INITDEFINENDS	@INITDEFINENDS@
-#define INITDEFINE6S	@INITDEFINE6S@
-#endif
+#ifndef HMAC_H
+#define HMAC_H
 
-extern const char dhcpcd_embedded_conf[];
+#include <sys/types.h>
+
+ssize_t	 hmac(const char *, const void *, size_t, const void *, size_t, void *,
+   size_t);
+
+#endif

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * dhcpcd - DHCP client daemon
- * Copyright (c) 2006-2021 Roy Marples <roy@marples.name>
+ * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
  * All rights reserved
 
  * Redistribution and use in source and binary forms, with or without
@@ -170,6 +170,7 @@ bool if_is_link_up(const struct interface *);
 bool if_valid_hwaddr(const uint8_t *, size_t);
 struct if_head *if_discover(struct dhcpcd_ctx *, struct ifaddrs **,
     int, char * const *);
+void if_freeifaddrs(struct dhcpcd_ctx *ctx, struct ifaddrs **);
 void if_markaddrsstale(struct if_head *);
 void if_learnaddrs(struct dhcpcd_ctx *, struct if_head *, struct ifaddrs **);
 void if_deletestaleaddrs(struct if_head *);

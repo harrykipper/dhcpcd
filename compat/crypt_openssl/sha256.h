@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
- * dhcpcd - DHCP client daemon
- * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
- * All rights reserved
-
+ * Copyright (c) 2023 Canonical Ltd.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -25,14 +24,23 @@
  * SUCH DAMAGE.
  */
 
-#ifdef SMALL
-#define INITDEFINES	@INITDEFINES_SMALL@
-#define INITDEFINENDS	@INITDEFINENDS_SMALL@
-#define INITDEFINE6S	@INITDEFINE6S_SMALL@
-#else
-#define INITDEFINES	@INITDEFINES@
-#define INITDEFINENDS	@INITDEFINENDS@
-#define INITDEFINE6S	@INITDEFINE6S@
-#endif
+#ifndef SHA256_H_
+#define SHA256_H_
 
-extern const char dhcpcd_embedded_conf[];
+#define SHA256_DIGEST_LENGTH		32
+
+#include "openssl/evp.h"
+typedef struct dhcpcd_SHA256Context {
+	EVP_MD_CTX *c;
+} dhcpcd_SHA256_CTX;
+
+void	dhcpcd_SHA256_Init(dhcpcd_SHA256_CTX *);
+void	dhcpcd_SHA256_Update(dhcpcd_SHA256_CTX *, const void *, size_t);
+void	dhcpcd_SHA256_Final(unsigned char [32], dhcpcd_SHA256_CTX *);
+
+#define SHA256_Init	dhcpcd_SHA256_Init
+#define SHA256_Update	dhcpcd_SHA256_Update
+#define SHA256_Final	dhcpcd_SHA256_Final
+#define SHA256_CTX	dhcpcd_SHA256_CTX
+
+#endif

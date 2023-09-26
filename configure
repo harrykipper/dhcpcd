@@ -13,6 +13,7 @@ IPV4LL=
 INET6=
 PRIVSEP=
 PRIVSEP_USER=
+SECCOMP=
 ARC4RANDOM=
 CLOSEFROM=
 RBTREE=
@@ -36,6 +37,7 @@ POLL=
 SMALL=
 SANITIZE=no
 STATUSARG=
+OPENSSL=
 
 DHCPCD_DEFS=dhcpcd-definitions.conf
 
@@ -70,6 +72,8 @@ for x do
 	--enable-auth) AUTH=yes;;
 	--disable-privsep) PRIVSEP=no;;
 	--enable-privsep) PRIVSEP=yes;;
+	--disable-seccomp) SECCOMP=no;;
+	--enable-seccomp) SECCOMP=yes;;
 	--privsepuser) PRIVSEP_USER=$var;;
 	--prefix) PREFIX=$var;prefix=$var;; # prefix is set for autotools compat
 	--sysconfdir) SYSCONFDIR=$var;;
@@ -107,6 +111,8 @@ for x do
 	--with-udev) DEV=yes; UDEV=yes;;
 	--without-udev) UDEV=no;;
 	--with-poll) POLL="$var";;
+	--with-openssl) OPENSSL=yes;;
+	--without-openssl) OPENSSL=no;;
 	--sanitise|--sanitize) SANITIZEADDRESS="yes";;
 	--serviceexists) SERVICEEXISTS=$var;;
 	--servicecmd) SERVICECMD=$var;;
@@ -115,7 +121,7 @@ for x do
 	--statusarg) STATUSARG=$var;;
 	--infodir) ;; # ignore autotools
 	--disable-maintainer-mode|--disable-dependency-tracking) ;;
-	--disable-silent-rules) ;;
+	--disable-option-checking|--disable-silent-rules) ;;
 	-V|--version)
 		v=$(sed -ne 's/.*VERSION[[:space:]]*"\([^"]*\).*/\1/p' defs.h);
 		c=$(sed -ne 's/^.*copyright\[\] = "\([^"]*\).*/\1/p' dhcpcd.c);
@@ -357,7 +363,7 @@ else
 	ALLOW_USR_LIBS=true
 fi
 case "$OS" in
-linux*|solaris*|sunos*|kfreebsd*) ;;
+linux*|solaris*|sunos*|kfreebsd*|dragonfly*|freebsd*) ;;
 *)
 	# There might be more than one ...
 	for LDELFN in /libexec/ld-elf.so.[0-9]*; do
@@ -585,7 +591,12 @@ if [ "$PRIVSEP" = yes ]; then
 		echo "PRIVSEP_SRCS+=	privsep-bpf.c" >>$CONFIG_MK
 	fi
 	case "$OS" in
-	linux*)		 echo "PRIVSEP_SRCS+=	privsep-linux.c" >>$CONFIG_MK;;
+	linux*)
+			 echo "PRIVSEP_SRCS+=	privsep-linux.c" >>$CONFIG_MK
+			 if [ -n "$SECCOMP" ] && [ "$SECCOMP" = no ]; then
+				 echo "#define	DISABLE_SECCOMP" >>$CONFIG_H
+			 fi
+			 ;;
 	solaris*|sunos*) echo "PRIVSEP_SRCS+=	privsep-sun.c" >>$CONFIG_MK;;
 	*)		 echo "PRIVSEP_SRCS+=	privsep-bsd.c" >>$CONFIG_MK;;
 	esac
@@ -848,8 +859,7 @@ if [ -z "$ARC4RANDOM" ]; then
 	cat <<EOF >_arc4random.c
 #include <stdlib.h>
 int main(void) {
-	arc4random();
-	return 0;
+	return (int)arc4random();
 }
 EOF
 	if $XCC _arc4random.c -o _arc4random 2>&3; then
@@ -870,8 +880,7 @@ if [ -z "$ARC4RANDOM_UNIFORM" ]; then
 	cat <<EOF >_arc4random_uniform.c
 #include <stdlib.h>
 int main(void) {
-	arc4random_uniform(100);
-	return 0;
+	return (int)arc4random_uniform(100);
 }
 EOF
 	if $XCC _arc4random_uniform.c -o _arc4random_uniform 2>&3; then
@@ -915,8 +924,7 @@ if [ -z "$PIDFILE_LOCK" ]; then
 #include <stdlib.h>
 #include <util.h>
 int main(void) {
-	pidfile_lock(NULL);
-	return 0;
+	return (int)pidfile_lock(NULL);
 }
 EOF
 	# We only want to link to libutil if it exists in /lib
@@ -985,8 +993,7 @@ if [ -z "$STRLCPY" ]; then
 int main(void) {
 	const char s1[] = "foo";
 	char s2[10];
-	strlcpy(s2, s1, sizeof(s2));
-	return 0;
+	return (int)strlcpy(s2, s1, sizeof(s2));
 }
 EOF
 	if $XCC _strlcpy.c -o _strlcpy 2>&3; then
@@ -1010,8 +1017,7 @@ if [ -z "$STRTOI" ]; then
 #include <inttypes.h>
 int main(void) {
 	int e;
-	strtoi("1234", NULL, 0, 0, INT32_MAX, &e);
-	return 0;
+	return (int)strtoi("1234", NULL, 0, 0, INT32_MAX, &e);
 }
 EOF
 	if $XCC _strtoi.c -o _strtoi 2>&3; then
@@ -1189,6 +1195,7 @@ EOF
 	rm -f _rbtree.c _rbtree
 fi
 if [ "$RBTREE" = no ]; then
+	echo "#define	HAVE_NBTOOL_CONFIG_H	0" >>$CONFIG_H
 	echo "#define	RBTEST" >>$CONFIG_H
 	echo "COMPAT_SRCS+=	compat/rb.c" >>$CONFIG_MK
 	echo "#include			\"compat/rbtree.h\"" >>$CONFIG_H
@@ -1266,8 +1273,7 @@ if [ -z "$POLL" ]; then
 #include <sys/select.h>
 #include <stdlib.h>
 int main(void) {
-	pselect(0, NULL, NULL, NULL, NULL, NULL);
-	return 0;
+	return pselect(0, NULL, NULL, NULL, NULL, NULL);
 }
 EOF
 	if $XCC _pselect.c -o _pselect 2>&3; then
@@ -1347,14 +1353,6 @@ if [ "$FLS64" = yes ]; then
 	echo "#define	HAVE_SYS_BITOPS_H" >>$CONFIG_H
 fi
 
-# Workaround for DragonFlyBSD import
-if [ "$OS" = dragonfly ]; then
-	echo "#ifdef	USE_PRIVATECRYPTO" >>$CONFIG_H
-	echo "#define	HAVE_MD5_H" >>$CONFIG_H
-	echo "#define	SHA2_H			<openssl/sha.h>" >>$CONFIG_H
-	echo "#else" >>$CONFIG_H
-fi
-
 if [ -z "$MD5" ]; then
 	MD5_LIB=
 	printf "Testing for MD5Init ... "
@@ -1384,14 +1382,6 @@ EOF
 	fi
 	echo "$MD5"
 	rm -f _md5.c _md5
-fi
-if [ "$MD5" = no ]; then
-	echo "#include			\"compat/crypt/md5.h\"" >>$CONFIG_H
-	echo "MD5_SRC=	compat/crypt/md5.c" >>$CONFIG_MK
-else
-	echo "MD5_SRC=" >>$CONFIG_MK
-	echo "#define	HAVE_MD5_H" >>$CONFIG_H
-	[ -n "$MD5_LIB" ] && echo "LDADD+=		$MD5_LIB" >>$CONFIG_MK
 fi
 
 if [ -z "$SHA2_H" ]; then
@@ -1478,7 +1468,119 @@ EOF
 		rm -f _sha256.c _sha256
 	fi
 fi
-if [ "$SHA2" = no ]; then
+
+if [ -z "$HMAC" ]; then
+	HMAC_LIB=
+	printf "Testing for hmac ... "
+	cat <<EOF >_hmac.c
+#include <stdlib.h>
+#include <hmac.h>
+int main(void) {
+	return (int)hmac(NULL, NULL, 0, NULL, 0, NULL, 0);
+}
+EOF
+	if $XCC _hmac.c $MD5_LIB -o _hmac 2>&3; then
+		HMAC=yes
+		echo "#define	HAVE_HMAC_H" >>$CONFIG_H
+	else
+		# Remove this test if NetBSD-8 ships with
+		# hmac in it's own header and not stdlib.h
+		cat <<EOF >_hmac.c
+#include <stdlib.h>
+int main(void) {
+	return (int)hmac(NULL, NULL, 0, NULL, 0, NULL, 0);
+}
+EOF
+		if $XCC _hmac.c $MD5_LIB -o _hmac 2>&3; then
+			HMAC=yes
+		else
+			HMAC=no
+		fi
+	fi
+	echo "$HMAC"
+	rm -f _hmac.c _hmac
+fi
+
+if [ "$OPENSSL" = yes ] ||
+   { [ -z "$OPENSSL" ] && [ "$ALLOW_USR_LIBS" = true ] &&
+     [ "$SHA2" = no ] &&  [ "$HMAC" = no ];
+   }; then
+	printf "Testing for openssl ... "
+	if type "$PKG_CONFIG" >/dev/null 2>&1; then
+		LIBCRYPTO_CFLAGS=$("$PKG_CONFIG" --cflags libcrypto 2>&3)
+		LIBCRYPTO_LIBS=$("$PKG_CONFIG" --libs libcrypto 2>&3)
+	fi
+
+	cat <<EOF >_openssl.c
+#include <stdio.h>
+#include <openssl/crypto.h>
+int main(void) {
+	return OPENSSL_init_crypto(0, NULL) == 1;
+}
+EOF
+	if $XCC $LIBCRYPTO_CFLAGS _openssl.c -o _openssl $LIBCRYPTO_LIBS 2>&3;
+	then
+		OPENSSL=yes
+		MD5=yes
+		MD5_LIB=
+		if [ -n "$LIBCRYPTO_CFLAGS" ]; then
+			echo "CFLAGS+=		$LIBCRYPTO_CFLAGS" >>$CONFIG_MK
+		fi
+		echo "LDADD+=		$LIBCRYPTO_LIBS" >>$CONFIG_MK
+		echo "#define	HAVE_OPENSSL" >>$CONFIG_H
+	else
+		OPENSSL=no
+	fi
+	echo "$OPENSSL"
+	rm -f _openssl.c _openssl
+fi
+
+if [ "$OPENSSL" = yes ]; then
+	printf "Testing for openssl/sha.h ... "
+	cat <<EOF >_openssl_sha.c
+#include <stdio.h>
+#include <openssl/sha.h>
+
+int main(void) {
+	SHA256_CTX ctx;
+	SHA256_Init(&ctx);
+	return 0;
+}
+EOF
+	if $XCC $LIBCRYPTO_CFLAGS _openssl_sha.c -o _openssl_sha \
+	   $LIBCRYPTO_LIBS 2>&3; then
+		SHA2_H=openssl/sha.h
+		SHA2="yes (-lcrypto)"
+	else
+		SHA2=no
+	fi
+	SHA2_LIB=
+	SHA2_RENAMED=
+	echo "$SHA2"
+	rm -f _openssl_sha.c _openssl_sha
+fi
+
+# Workaround for DragonFlyBSD import
+if [ "$OS" = dragonfly ]; then
+	echo "#ifdef	USE_PRIVATECRYPTO" >>$CONFIG_H
+	echo "#define	HAVE_MD5_H" >>$CONFIG_H
+	echo "#define	SHA2_H			<openssl/sha.h>" >>$CONFIG_H
+	echo "#else" >>$CONFIG_H
+fi
+
+if [ "$MD5" = no ]; then
+	echo "#include			\"compat/crypt/md5.h\"" >>$CONFIG_H
+	echo "MD5_SRC=	compat/crypt/md5.c" >>$CONFIG_MK
+else
+	echo "MD5_SRC=" >>$CONFIG_MK
+	[ "$OPENSSL" != yes ] && echo "#define	HAVE_MD5_H" >>$CONFIG_H
+	[ -n "$MD5_LIB" ] && echo "LDADD+=		$MD5_LIB" >>$CONFIG_MK
+fi
+
+if [ "$OPENSSL" = yes ] && [ "$SHA2" = no ]; then
+	echo "#include			\"compat/crypt_openssl/sha256.h\"" >>$CONFIG_H
+	echo "SHA256_SRC=	compat/crypt_openssl/sha256.c" >>$CONFIG_MK
+elif [ "$SHA2" = no ]; then
 	echo "#include			\"compat/crypt/sha256.h\"" >>$CONFIG_H
 	echo "SHA256_SRC=	compat/crypt/sha256.c" >>$CONFIG_MK
 else
@@ -1496,40 +1598,10 @@ fi
 # Workarond for DragonFlyBSD import
 [ "$OS" = dragonfly ] && echo "#endif" >>$CONFIG_H
 
-if [ -z "$HMAC" ]; then
-	HMAC_LIB=
-	printf "Testing for hmac ... "
-	cat <<EOF >_hmac.c
-#include <stdlib.h>
-#include <hmac.h>
-int main(void) {
-	hmac(NULL, NULL, 0, NULL, 0, NULL, 0);
-	return 0;
-}
-EOF
-	if $XCC _hmac.c $MD5_LIB -o _hmac 2>&3; then
-		HMAC=yes
-		echo "#define	HAVE_HMAC_H" >>$CONFIG_H
-	else
-		# Remove this test if NetBSD-8 ships with
-		# hmac in it's own header and not stdlib.h
-		cat <<EOF >_hmac.c
-#include <stdlib.h>
-int main(void) {
-	hmac(NULL, NULL, 0, NULL, 0, NULL, 0);
-	return 0;
-}
-EOF
-		if $XCC _hmac.c $MD5_LIB -o _hmac 2>&3; then
-			HMAC=yes
-		else
-			HMAC=no
-		fi
-	fi
-	echo "$HMAC"
-	rm -f _hmac.c _hmac
-fi
-if [ "$HMAC" = no ]; then
+if [ "$OPENSSL" = yes ]; then
+	echo "#include			\"compat/crypt_openssl/hmac.h\"" >>$CONFIG_H
+	echo "HMAC_SRC=	compat/crypt_openssl/hmac.c" >>$CONFIG_MK
+elif [ "$HMAC" = no ]; then
 	echo "#include			\"compat/crypt/hmac.h\"" >>$CONFIG_H
 	echo "HMAC_SRC=	compat/crypt/hmac.c" >>$CONFIG_MK
 else
@@ -1589,8 +1661,7 @@ if [ "$DEV" != no ] && [ "$UDEV" != no ] && [ -n "$LIBUDEV_LIBS" ]; then
 #include <libudev.h>
 #include <stdlib.h>
 int main(void) {
-	udev_monitor_filter_add_match_subsystem_devtype(NULL, NULL, NULL);
-	return 0;
+	return udev_monitor_filter_add_match_subsystem_devtype(NULL, NULL, NULL);
 }
 EOF
 	if $XCC $LIBUDEV_CFLAGS _udev.c -o _udev $LIBUDEV_LIBS 2>&3
@@ -1607,8 +1678,7 @@ EOF
 #include <libudev.h>
 #include <stdlib.h>
 int main(void) {
-	udev_device_get_is_initialized(NULL);
-	return 0;
+	return udev_device_get_is_initialized(NULL);
 }
 EOF
 	if $XCC $LIBUDEV_CFLAGS _udev.c -o _udev $LIBUDEV_LIBS 2>&3

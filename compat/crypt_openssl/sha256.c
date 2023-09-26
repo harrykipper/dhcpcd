@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
- * dhcpcd - DHCP client daemon
- * Copyright (c) 2006-2023 Roy Marples <roy@marples.name>
- * All rights reserved
-
+ * Copyright (c) 2023 Canonical Ltd.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -25,14 +24,33 @@
  * SUCH DAMAGE.
  */
 
-#ifdef SMALL
-#define INITDEFINES	@INITDEFINES_SMALL@
-#define INITDEFINENDS	@INITDEFINENDS_SMALL@
-#define INITDEFINE6S	@INITDEFINE6S_SMALL@
-#else
-#define INITDEFINES	@INITDEFINES@
-#define INITDEFINENDS	@INITDEFINENDS@
-#define INITDEFINE6S	@INITDEFINE6S@
-#endif
+#include "config.h"
+#include "sha256.h"
 
-extern const char dhcpcd_embedded_conf[];
+#include "openssl/evp.h"
+
+/* SHA-256 initialization.  Begins a SHA-256 operation. */
+void
+dhcpcd_SHA256_Init(SHA256_CTX *ctx)
+{
+	ctx->c = EVP_MD_CTX_new();
+	EVP_DigestInit_ex2(ctx->c, EVP_sha256(), NULL);
+}
+
+/* Add bytes into the hash */
+void
+dhcpcd_SHA256_Update(SHA256_CTX *ctx, const void *in, size_t len)
+{
+	EVP_DigestUpdate(ctx->c, in, len);
+}
+
+/*
+ * SHA-256 finalization.  Pads the input data, exports the hash value,
+ * and clears the context state.
+ */
+void
+dhcpcd_SHA256_Final(unsigned char digest[32], SHA256_CTX *ctx)
+{
+	EVP_DigestFinal_ex(ctx->c, digest, NULL);
+	EVP_MD_CTX_free(ctx->c);
+}
